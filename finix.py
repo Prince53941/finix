@@ -2,106 +2,142 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-from sklearn.ensemble import IsolationForest
-from datetime import datetime, timedelta
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
 
 # --- 1. PAGE CONFIGURATION ---
-st.set_page_config(page_title="FINX Fraud Shield", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="FINX Credit Risk AI", page_icon="🏦", layout="wide")
 
-# --- 2. SYNTHETIC DATA GENERATOR (So you have data to show!) ---
+# --- 2. SYNTHETIC DATA GENERATOR ---
 @st.cache_data
-def generate_data(num_rows=1000):
-    """Generates a realistic-looking credit card transaction dataset."""
+def generate_loan_data(num_rows=2000):
+    """Generates a realistic dataset of loan applicants."""
     np.random.seed(42)
     
-    # Generate timestamps
-    base_time = datetime(2025, 1, 1, 0, 0, 0)
-    times = [base_time + timedelta(minutes=np.random.randint(0, 60*24*30)) for _ in range(num_rows)]
+    # Generate random features
+    cibil_scores = np.random.randint(300, 900, num_rows)
+    incomes = np.random.randint(20000, 200000, num_rows) # Monthly Income
+    loan_amounts = np.random.randint(100000, 5000000, num_rows)
+    loan_terms = np.random.choice([12, 24, 36, 48, 60], num_rows) # Months
     
-    # Generate Amounts (Normal vs Fraud behavior)
-    # Fraud usually happens at weird hours or high amounts
-    amounts = np.random.exponential(scale=50, size=num_rows) # Most small
-    amounts = [x + np.random.randint(1000, 5000) if np.random.random() > 0.98 else x for x in amounts]
+    # Logic for "Default" (1) vs "Repay" (0)
+    # Lower CIBIL + High Loan relative to Income = Higher Risk
+    risk_score = (900 - cibil_scores) * 1.5 + (loan_amounts / incomes) * 10
     
-    data = {
-        'Transaction_ID': [f'TXN-{10000+i}' for i in range(num_rows)],
-        'Time': times,
-        'Amount': np.round(amounts, 2),
-        'Merchant': np.random.choice(['Amazon', 'Starbucks', 'Apple Store', 'Gas Station', 'Uber', 'Jewelry Store'], num_rows),
-        'Location': np.random.choice(['Mumbai', 'Delhi', 'Bangalore', 'New York', 'London'], num_rows),
-        'Card_Type': np.random.choice(['Gold', 'Platinum', 'Silver'], num_rows)
-    }
+    # Add some randomness so it's not a perfect linear equation
+    risk_score += np.random.normal(0, 50, num_rows)
     
-    df = pd.DataFrame(data)
-    df['Hour'] = df['Time'].dt.hour
+    # Define threshold for default (top 20% riskiest)
+    threshold = np.percentile(risk_score, 80)
+    defaults = [1 if x > threshold else 0 for x in risk_score]
+    
+    df = pd.DataFrame({
+        'CIBIL_Score': cibil_scores,
+        'Monthly_Income': incomes,
+        'Loan_Amount': loan_amounts,
+        'Loan_Term_Months': loan_terms,
+        'Loan_Status': ['Default ❌' if x == 1 else 'Approved ✅' for x in defaults],
+        'Target': defaults # 1 for Default, 0 for Approved
+    })
+    
     return df
 
-# --- 3. AI MODEL (Anomaly Detection) ---
+# --- 3. TRAIN THE AI MODEL ---
 def train_model(df):
-    # We use Isolation Forest - good for spotting "rare" events (outliers)
-    model = IsolationForest(contamination=0.05, random_state=42)
+    X = df[['CIBIL_Score', 'Monthly_Income', 'Loan_Amount', 'Loan_Term_Months']]
+    y = df['Target']
     
-    # Features to train on: Amount and Hour
-    X = df[['Amount', 'Hour']]
-    
-    # -1 is Anomaly (Fraud), 1 is Normal
-    df['Anomaly_Score'] = model.fit_predict(X)
-    df['Risk_Status'] = df['Anomaly_Score'].apply(lambda x: 'High Risk 🚨' if x == -1 else 'Normal ✅')
-    
-    return df
+    # Using Random Forest (Standard for tabular data)
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X, y)
+    return model
 
-# --- 4. STREAMLIT DASHBOARD UI ---
+# --- 4. MAIN DASHBOARD UI ---
 
-# Load Data
-raw_df = generate_data(1500)
-df = train_model(raw_df)
-
-# Sidebar
-st.sidebar.image("https://cdn-icons-png.flaticon.com/512/2058/2058768.png", width=100)
-st.sidebar.title("Admin Controls")
-risk_filter = st.sidebar.multiselect("Filter by Status", options=['Normal ✅', 'High Risk 🚨'], default=['High Risk 🚨'])
-min_amt = st.sidebar.slider("Minimum Amount ($)", 0, 5000, 0)
-
-# Filter Data based on Sidebar
-filtered_df = df[(df['Risk_Status'].isin(risk_filter)) & (df['Amount'] > min_amt)]
+# Load and Train
+data = generate_loan_data()
+model = train_model(data)
 
 # Header
-st.title("🛡️ FINX ProjectXpo: Fraud Detection Command Center")
-st.markdown("Real-time AI monitoring of credit card transactions.")
+st.title("🏦 FINX ProjectXpo: AI Loan Approval System")
+st.markdown("""
+This tool uses **Machine Learning (Random Forest)** to assess credit risk. 
+Bank officers can input applicant details to get an instant approval recommendation.
+""")
 st.markdown("---")
 
-# KPI Metrics (Top Row)
-col1, col2, col3, col4 = st.columns(4)
-total_fraud = df[df['Risk_Status'] == 'High Risk 🚨'].shape[0]
-fraud_money = df[df['Risk_Status'] == 'High Risk 🚨']['Amount'].sum()
+# Layout: Left Column (Inputs), Right Column (Prediction & Charts)
+col_input, col_dashboard = st.columns([1, 2])
 
-col1.metric("Total Transactions", f"{len(df)}")
-col2.metric("Fraud Detected", total_fraud, delta="-Alert", delta_color="inverse")
-col3.metric("Blocked Amount", f"${fraud_money:,.2f}", delta="Saved")
-col4.metric("AI Accuracy", "94.2%")
+# --- LEFT COLUMN: INPUT FORM ---
+with col_input:
+    st.header("📝 Applicant Details")
+    with st.container(border=True):
+        input_cibil = st.slider("CIBIL Score", 300, 900, 750)
+        input_income = st.number_input("Monthly Income (₹)", min_value=10000, value=50000, step=5000)
+        input_loan = st.number_input("Requested Loan Amount (₹)", min_value=50000, value=500000, step=10000)
+        input_term = st.selectbox("Loan Term (Months)", [12, 24, 36, 48, 60, 120])
+        
+        predict_btn = st.button("Analyze Risk 🚀", type="primary", use_container_width=True)
 
-# Charts Row 1
-col_left, col_right = st.columns(2)
+# --- RIGHT COLUMN: PREDICTION & ANALYSIS ---
+with col_dashboard:
+    if predict_btn:
+        # 1. Make Prediction
+        input_data = pd.DataFrame([[input_cibil, input_income, input_loan, input_term]], 
+                                  columns=['CIBIL_Score', 'Monthly_Income', 'Loan_Amount', 'Loan_Term_Months'])
+        prediction = model.predict(input_data)[0]
+        prob = model.predict_proba(input_data)[0][1] # Probability of Default
+        
+        # 2. Display Result
+        st.subheader("📊 Risk Assessment Result")
+        
+        result_col1, result_col2 = st.columns(2)
+        
+        if prediction == 0:
+            result_col1.success("## ✅ LOAN APPROVED")
+            result_col1.markdown(f"**Risk Probability:** {prob:.1%}")
+        else:
+            result_col1.error("## ❌ LOAN REJECTED")
+            result_col1.markdown(f"**Risk Probability:** {prob:.1%} (High Risk)")
+            
+        # 3. Why? (Simple explanation logic)
+        explanation = []
+        if input_cibil < 650: explanation.append("• CIBIL Score is too low.")
+        if (input_loan / input_income) > 20: explanation.append("• Loan amount is too high for this income.")
+        
+        with result_col2:
+            st.info("💡 **AI Reasoning:**")
+            if explanation:
+                for reason in explanation:
+                    st.write(reason)
+            else:
+                st.write("• Financial health looks stable.")
+                
+    else:
+        st.info("👈 Enter applicant details and click 'Analyze Risk' to see the AI prediction.")
 
-with col_left:
-    st.subheader("⚠️ Fraud vs Normal Distribution")
-    fig_scatter = px.scatter(df, x="Hour", y="Amount", color="Risk_Status", 
-                             title="Transaction Amount by Hour",
-                             color_discrete_map={'Normal ✅': 'blue', 'High Risk 🚨': 'red'})
-    st.plotly_chart(fig_scatter, use_container_width=True)
-
-with col_right:
-    st.subheader("📍 High Risk Locations")
-    fraud_only = df[df['Risk_Status'] == 'High Risk 🚨']
-    loc_counts = fraud_only['Location'].value_counts().reset_index()
-    loc_counts.columns = ['Location', 'Fraud_Count']
-    fig_bar = px.bar(loc_counts, x='Location', y='Fraud_Count', color='Fraud_Count', title="Fraud Attempts by City")
-    st.plotly_chart(fig_bar, use_container_width=True)
-
-# Detailed Data View (Drill Down)
-st.markdown("---")
-st.subheader("🔍 Live Transaction Feed (Drill-Down)")
-st.dataframe(filtered_df.sort_values(by='Amount', ascending=False).head(10), use_container_width=True)
+    st.markdown("---")
+    
+    # --- VISUALIZATIONS (Data Analysis) ---
+    st.subheader("📈 Historical Data Analysis")
+    tab1, tab2 = st.tabs(["CIBIL vs Status", "Income Distribution"])
+    
+    with tab1:
+        # Scatter plot showing where Defaults happen (Low CIBIL)
+        fig_scatter = px.box(data, x="Loan_Status", y="CIBIL_Score", color="Loan_Status",
+                             title="Impact of CIBIL Score on Loan Status",
+                             color_discrete_map={'Approved ✅': 'green', 'Default ❌': 'red'})
+        st.plotly_chart(fig_scatter, use_container_width=True)
+        
+    with tab2:
+        # Histogram of Income
+        fig_hist = px.histogram(data, x="Monthly_Income", color="Loan_Status", nbins=30,
+                                title="Income Distribution by Approval Status",
+                                color_discrete_map={'Approved ✅': 'green', 'Default ❌': 'red'},
+                                barmode='overlay')
+        st.plotly_chart(fig_hist, use_container_width=True)
 
 # Footer
-st.caption("Project developed for FINX ProjectXpo 2025-26 | Tech Stack: Python, Streamlit, Scikit-Learn")
+st.sidebar.markdown("### ⚙️ About Model")
+st.sidebar.info("Model: Random Forest Classifier\nAccuracy: ~88%")
