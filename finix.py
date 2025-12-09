@@ -2,142 +2,185 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
+import plotly.graph_objects as go
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
 
-# --- 1. PAGE CONFIGURATION ---
-st.set_page_config(page_title="FINX Credit Risk AI", page_icon="🏦", layout="wide")
+# --- 1. PAGE CONFIGURATION & STYLING ---
+st.set_page_config(
+    page_title="FINX RiskGuard | Enterprise Edition", 
+    page_icon="🛡️", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# --- 2. SYNTHETIC DATA GENERATOR ---
+# Custom CSS for a Professional Look
+st.markdown("""
+    <style>
+    .main {
+        background-color: #f8f9fa; 
+    }
+    .stButton>button {
+        width: 100%;
+        border-radius: 5px;
+        height: 3em;
+        background-color: #004e92;
+        color: white;
+    }
+    .stMetric {
+        background-color: #ffffff;
+        padding: 15px;
+        border-radius: 5px;
+        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 2. SYNTHETIC DATA & MODEL (Backend Logic) ---
 @st.cache_data
-def generate_loan_data(num_rows=2000):
-    """Generates a realistic dataset of loan applicants."""
+def generate_and_train():
+    """Generates data and trains the model once."""
     np.random.seed(42)
+    num_rows = 2000
     
     # Generate random features
-    cibil_scores = np.random.randint(300, 900, num_rows)
-    incomes = np.random.randint(20000, 200000, num_rows) # Monthly Income
-    loan_amounts = np.random.randint(100000, 5000000, num_rows)
-    loan_terms = np.random.choice([12, 24, 36, 48, 60], num_rows) # Months
+    cibil = np.random.randint(300, 900, num_rows)
+    income = np.random.randint(25000, 300000, num_rows)
+    loan = np.random.randint(50000, 5000000, num_rows)
+    term = np.random.choice([12, 24, 36, 48, 60], num_rows)
     
-    # Logic for "Default" (1) vs "Repay" (0)
-    # Lower CIBIL + High Loan relative to Income = Higher Risk
-    risk_score = (900 - cibil_scores) * 1.5 + (loan_amounts / incomes) * 10
+    # Logic: Risk Score calculation
+    risk_score = (900 - cibil) * 1.2 + (loan / income) * 15
+    risk_score += np.random.normal(0, 40, num_rows)
     
-    # Add some randomness so it's not a perfect linear equation
-    risk_score += np.random.normal(0, 50, num_rows)
-    
-    # Define threshold for default (top 20% riskiest)
-    threshold = np.percentile(risk_score, 80)
+    # Threshold for default
+    threshold = np.percentile(risk_score, 82)
     defaults = [1 if x > threshold else 0 for x in risk_score]
     
     df = pd.DataFrame({
-        'CIBIL_Score': cibil_scores,
-        'Monthly_Income': incomes,
-        'Loan_Amount': loan_amounts,
-        'Loan_Term_Months': loan_terms,
-        'Loan_Status': ['Default ❌' if x == 1 else 'Approved ✅' for x in defaults],
-        'Target': defaults # 1 for Default, 0 for Approved
+        'CIBIL_Score': cibil,
+        'Monthly_Income': income,
+        'Loan_Amount': loan,
+        'Loan_Term_Months': term,
+        'Target': defaults
     })
     
-    return df
-
-# --- 3. TRAIN THE AI MODEL ---
-def train_model(df):
+    # Train Model
     X = df[['CIBIL_Score', 'Monthly_Income', 'Loan_Amount', 'Loan_Term_Months']]
     y = df['Target']
-    
-    # Using Random Forest (Standard for tabular data)
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X, y)
-    return model
+    
+    return model, df
 
-# --- 4. MAIN DASHBOARD UI ---
+model, historical_df = generate_and_train()
 
-# Load and Train
-data = generate_loan_data()
-model = train_model(data)
-
-# Header
-st.title("🏦 FINX ProjectXpo: AI Loan Approval System")
-st.markdown("""
-This tool uses **Machine Learning (Random Forest)** to assess credit risk. 
-Bank officers can input applicant details to get an instant approval recommendation.
-""")
-st.markdown("---")
-
-# Layout: Left Column (Inputs), Right Column (Prediction & Charts)
-col_input, col_dashboard = st.columns([1, 2])
-
-# --- LEFT COLUMN: INPUT FORM ---
-with col_input:
-    st.header("📝 Applicant Details")
-    with st.container(border=True):
-        input_cibil = st.slider("CIBIL Score", 300, 900, 750)
-        input_income = st.number_input("Monthly Income (₹)", min_value=10000, value=50000, step=5000)
-        input_loan = st.number_input("Requested Loan Amount (₹)", min_value=50000, value=500000, step=10000)
-        input_term = st.selectbox("Loan Term (Months)", [12, 24, 36, 48, 60, 120])
-        
-        predict_btn = st.button("Analyze Risk 🚀", type="primary", use_container_width=True)
-
-# --- RIGHT COLUMN: PREDICTION & ANALYSIS ---
-with col_dashboard:
-    if predict_btn:
-        # 1. Make Prediction
-        input_data = pd.DataFrame([[input_cibil, input_income, input_loan, input_term]], 
-                                  columns=['CIBIL_Score', 'Monthly_Income', 'Loan_Amount', 'Loan_Term_Months'])
-        prediction = model.predict(input_data)[0]
-        prob = model.predict_proba(input_data)[0][1] # Probability of Default
-        
-        # 2. Display Result
-        st.subheader("📊 Risk Assessment Result")
-        
-        result_col1, result_col2 = st.columns(2)
-        
-        if prediction == 0:
-            result_col1.success("## ✅ LOAN APPROVED")
-            result_col1.markdown(f"**Risk Probability:** {prob:.1%}")
-        else:
-            result_col1.error("## ❌ LOAN REJECTED")
-            result_col1.markdown(f"**Risk Probability:** {prob:.1%} (High Risk)")
-            
-        # 3. Why? (Simple explanation logic)
-        explanation = []
-        if input_cibil < 650: explanation.append("• CIBIL Score is too low.")
-        if (input_loan / input_income) > 20: explanation.append("• Loan amount is too high for this income.")
-        
-        with result_col2:
-            st.info("💡 **AI Reasoning:**")
-            if explanation:
-                for reason in explanation:
-                    st.write(reason)
-            else:
-                st.write("• Financial health looks stable.")
-                
-    else:
-        st.info("👈 Enter applicant details and click 'Analyze Risk' to see the AI prediction.")
-
+# --- 3. SIDEBAR: APPLICANT PROFILE ---
+with st.sidebar:
+    st.image("https://cdn-icons-png.flaticon.com/512/2704/2704029.png", width=60)
+    st.title("FINX RiskGuard")
+    st.caption("Enterprise Credit Assessment System")
+    st.divider()
+    
+    st.header("📝 New Application")
+    
+    input_cibil = st.slider("CIBIL / Credit Score", 300, 900, 750, help="Range: 300 (Poor) to 900 (Excellent)")
+    input_income = st.number_input("Monthly Income (INR)", min_value=10000, value=65000, step=5000)
+    input_loan = st.number_input("Requested Loan Amount", min_value=10000, value=500000, step=10000)
+    input_term = st.select_slider("Loan Tenure (Months)", options=[12, 24, 36, 48, 60, 84, 120], value=36)
+    
+    st.divider()
+    predict_btn = st.button("RUN RISK ANALYSIS ▶")
+    
     st.markdown("---")
-    
-    # --- VISUALIZATIONS (Data Analysis) ---
-    st.subheader("📈 Historical Data Analysis")
-    tab1, tab2 = st.tabs(["CIBIL vs Status", "Income Distribution"])
-    
-    with tab1:
-        # Scatter plot showing where Defaults happen (Low CIBIL)
-        fig_scatter = px.box(data, x="Loan_Status", y="CIBIL_Score", color="Loan_Status",
-                             title="Impact of CIBIL Score on Loan Status",
-                             color_discrete_map={'Approved ✅': 'green', 'Default ❌': 'red'})
-        st.plotly_chart(fig_scatter, use_container_width=True)
-        
-    with tab2:
-        # Histogram of Income
-        fig_hist = px.histogram(data, x="Monthly_Income", color="Loan_Status", nbins=30,
-                                title="Income Distribution by Approval Status",
-                                color_discrete_map={'Approved ✅': 'green', 'Default ❌': 'red'},
-                                barmode='overlay')
-        st.plotly_chart(fig_hist, use_container_width=True)
+    st.caption("© 2025 FINX Tech. Internal Use Only.")
 
-# Footer
-st.sidebar.markdown("### ⚙️ About Model")
-st.sidebar.info("Model: Random Forest Classifier\nAccuracy: ~88%")
+# --- 4. MAIN DASHBOARD AREA ---
+
+# Top Header
+st.title("Credit Risk Analysis Dashboard")
+st.markdown(f"**Current Session:** {pd.Timestamp.now().strftime('%d-%b-%Y %H:%M')}")
+st.divider()
+
+if predict_btn:
+    # --- CALCULATION ---
+    input_data = pd.DataFrame([[input_cibil, input_income, input_loan, input_term]], 
+                              columns=['CIBIL_Score', 'Monthly_Income', 'Loan_Amount', 'Loan_Term_Months'])
+    
+    # Get Probability of Default (Risk %)
+    risk_prob = model.predict_proba(input_data)[0][1] 
+    risk_percentage = round(risk_prob * 100, 1)
+    
+    # Decision Logic
+    if risk_percentage < 30:
+        status = "APPROVED"
+        color = "green"
+        msg = "Applicant meets all credit criteria."
+    elif risk_percentage < 60:
+        status = "REVIEW REQUIRED"
+        color = "orange"
+        msg = "Moderate risk detected. Manual verification recommended."
+    else:
+        status = "REJECTED"
+        color = "red"
+        msg = "High probability of default detected."
+
+    # --- RESULTS SECTION ---
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        # GAUGE CHART (SPEEDOMETER)
+        fig_gauge = go.Figure(go.Indicator(
+            mode = "gauge+number",
+            value = risk_percentage,
+            domain = {'x': [0, 1], 'y': [0, 1]},
+            title = {'text': "Default Risk Probability"},
+            gauge = {
+                'axis': {'range': [0, 100]},
+                'bar': {'color': color},
+                'steps': [
+                    {'range': [0, 30], 'color': "lightgreen"},
+                    {'range': [30, 60], 'color': "lightyellow"},
+                    {'range': [60, 100], 'color': "#ffcccb"}],
+                'threshold': {
+                    'line': {'color': "red", 'width': 4},
+                    'thickness': 0.75,
+                    'value': risk_percentage}}))
+        
+        st.plotly_chart(fig_gauge, use_container_width=True)
+
+    with col2:
+        # TEXT RESULT
+        st.subheader("Decision:")
+        if status == "APPROVED":
+            st.success(f"### ✅ {status}")
+        elif status == "REVIEW REQUIRED":
+            st.warning(f"### ⚠️ {status}")
+        else:
+            st.error(f"### ❌ {status}")
+            
+        st.info(f"**AI Assessment:** {msg}")
+        
+        # Key Ratios
+        r_col1, r_col2 = st.columns(2)
+        dti = (input_loan / input_term) / input_income * 100 # Approx Debt-to-Income
+        r_col1.metric("Debt-to-Income Ratio", f"{dti:.1f}%", delta="< 40% is good" if dti < 40 else "High", delta_color="inverse")
+        r_col2.metric("Credit Score", input_cibil, delta="Excellent" if input_cibil > 750 else "Average")
+
+else:
+    # DEFAULT LANDING SCREEN (Before button press)
+    st.info("👈 Please enter applicant details in the sidebar to generate a report.")
+    
+    # Show Historical Trends (To make the screen look busy/professional initially)
+    st.subheader("Market Trends & Historical Data")
+    
+    row1_col1, row1_col2 = st.columns(2)
+    with row1_col1:
+        fig1 = px.histogram(historical_df, x="CIBIL_Score", nbins=40, title="Distribution of Applicant Credit Scores")
+        fig1.update_layout(bargap=0.1)
+        st.plotly_chart(fig1, use_container_width=True)
+        
+    with row1_col2:
+        # Create a simplified Status column for visualization
+        historical_df['Status'] = historical_df['Target'].apply(lambda x: 'Default' if x==1 else 'Paid')
+        fig2 = px.pie(historical_df, names='Status', title="Portfolio Health (Default vs Paid)", color_discrete_sequence=['red', 'green'])
+        st.plotly_chart(fig2, use_container_width=True)
